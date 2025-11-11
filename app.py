@@ -36,5 +36,6 @@ def upload_audio():
     return jsonify({"filename": saved_name}), 200
 
 if __name__ == '__main__':
-    # Run development server. Visit http://127.0.0.1:5000
-    app.run(debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    # Do NOT use debug=True on render (it spawns a reloader that can confuse process detection)
+    app.run(host='0.0.0.0', port=port, debug=False)
