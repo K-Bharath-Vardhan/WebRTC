@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>WebRTC Audio Capture & Speech-to-Text</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; background-color: #f5f5f5; }
+        .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #333; text-align: center; }
+        .controls { display:flex; gap:10px; justify-content:center; margin:20px 0; flex-wrap:wrap; }
+        button { padding:12px 24px; font-size:16px; border:none; border-radius:5px; cursor:pointer; transition:all .3s; }
+        .start-btn { background:#4CAF50; color:#fff; } .start-btn:hover{background:#45a049}
+        .start-btn:disabled{background:#ccc; cursor:not-allowed}
+        .stop-btn { background:#f44336; color:#fff } .stop-btn:hover{background:#da190b}
+        .download-btn { background:#2196F3; color:#fff } .download-btn:hover{background:#0b7dda}
+        .download-btn:disabled{background:#ccc; cursor:not-allowed}
+        .upload-btn { background:#6a1b9a; color:#fff } .upload-btn:hover{background:#5e0f85}
+        .status { text-align:center; padding:10px; margin:20px 0; border-radius:5px; font-weight:bold; }
+        .status.recording { background:#ffebee; color:#c62828 }
+        .status.idle { background:#e8f5e9; color:#2e7d32 }
+        .transcript-section { margin-top:30px }
+        .transcript-box { min-height:150px; padding:15px; border:2px solid #ddd; border-radius:5px; background:#fafafa; margin-top:10px; }
+        .final-transcript { color:#000; line-height:1.6 }
+        .interim-transcript { color:#999; font-style:italic }
+        .error { color:#f44336; background:#ffebee; padding:10px; border-radius:5px; margin:10px 0; display:none }
+        .info { background:#e3f2fd; padding:15px; border-radius:5px; margin-bottom:20px; border-left:4px solid #2196F3 }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 WebRTC Audio Capture & Speech-to-Text</h1>
+        <div class="info"><strong>Instructions:</strong> Click "Start Recording" to begin. Speak clearly. Click "Stop Recording" when done. You can download locally or upload the audio to the Flask server.</div>
+
+        <div class="status idle" id="status">Ready to start</div>
+
+        <div class="controls">
+            <button class="start-btn" id="startBtn">Start Recording & Transcription</button>
+            <button class="stop-btn" id="stopBtn" disabled>Stop Recording</button>
+            <button class="download-btn" id="downloadBtn" disabled>Download Audio</button>
+            <button class="upload-btn" id="uploadBtn" disabled>Upload to Server</button>
+        </div>
+
+        <div id="error" class="error"></div>
+
+        <div class="transcript-section">
+            <h3>Transcript:</h3>
+            <div class="transcript-box">
+                <div class="final-transcript" id="finalTranscript"></div>
+                <div class="interim-transcript" id="interimTranscript"></div>
+            </div>
+        </div>
+
+        <div id="uploadResult" style="margin-top:15px; font-size:14px;"></div>
+    </div>
+
+    <script>
+        // Feature detection
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const statusDiv = document.getElementById('status');
+        const errorDiv = document.getElementById('error');
+        const finalTranscriptDiv = document.getElementById('finalTranscript');
+        const interimTranscriptDiv = document.getElementById('interimTranscript');
+        const uploadResultDiv = document.getElementById('uploadResult');
+
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let recognition = null;
+        let finalTranscript = '';
+        let currentStream = null;
+        let currentBlob = null;
+
+        function showError(msg) {
+            errorDiv.textContent = msg;
+            errorDiv.style.display = 'block';
+            console.error(msg);
+        }
+        function clearError() {
+            errorDiv.style.display = 'none';
+            errorDiv.textContent = '';
+        }
+        function updateStatus(message, isRecording) {
+            statusDiv.textContent = message;
+            statusDiv.className = isRecording ? 'status recording' : 'status idle';
+        }
+
+        function initSpeechRecognition() {
+            if (!SpeechRecognition) {
+                showError('Speech Recognition is not supported by this browser. Use Chrome or Edge (desktop) for best results.');
+                return null;
+            }
+
+            const r = new SpeechRecognition();
+            r.continuous = true;       // keep results coming
+            r.interimResults = true;   // allow interim (partial) results
+            r.lang = 'en-US';
+            r.maxAlternatives = 1;
+
+            r.onresult = (event) => {
+                let interim = '';
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    const result = event.results[i];
+                    const transcript = (result[0] && result[0].transcript) ? result[0].transcript : '';
+                    if (result.isFinal) {
+                        finalTranscript += transcript + ' ';
+                        finalTranscriptDiv.textContent = finalTranscript;
+                    } else {
+                        interim += transcript;
+                    }
+                }
+                interimTranscriptDiv.textContent = interim;
+            };
+
+            r.onerror = (event) => {
+                // show friendly messages for common errors
+                if (event.error === 'no-speech') {
+                    showError('No speech detected. Please speak louder or check your microphone.');
+                } else if (event.error === 'not-allowed' || event.error === 'permission-denied') {
+                    showError('Microphone access was denied. Please allow microphone access and reload the page.');
+                } else {
+                    showError(`Speech recognition error: ${event.error}`);
+                }
+            };
+
+            r.onend = () => {
+                // some browsers stop recognition periodically — if we are still recording, restart
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    try {
+                        r.start();
+                    } catch (e) {
+                        console.warn('Could not restart recognition:', e);
+                    }
+                } else {
+                    console.log('Recognition ended (not restarting).');
+                }
+            };
+
+            r.onstart = () => console.log('Speech recognition started');
+            return r;
+        }
+
+        async function startRecording() {
+            clearError();
+            finalTranscript = '';
+            finalTranscriptDiv.textContent = '';
+            interimTranscriptDiv.textContent = '';
+            downloadBtn.disabled = true;
+            uploadBtn.disabled = true;
+            uploadResultDiv.textContent = '';
+
+            // request mic
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true
+                    }
+                });
+                currentStream = stream;
+            } catch (err) {
+                showError('Could not access microphone. Check permissions and try again.');
+                console.error(err);
+                return;
+            }
+
+            // Decide mime type
+            let mimeType = '';
+            if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+                mimeType = 'audio/webm;codecs=opus';
+            } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+                mimeType = 'audio/webm';
+            } else if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) {
+                mimeType = 'audio/ogg;codecs=opus';
+            } else {
+                mimeType = ''; // let browser pick default
+            }
+
+            try {
+                mediaRecorder = mimeType ? new MediaRecorder(currentStream, { mimeType }) : new MediaRecorder(currentStream);
+            } catch (err) {
+                showError('Your browser does not support recording in the selected format or MediaRecorder creation failed.');
+                console.error(err);
+                return;
+            }
+
+            audioChunks = [];
+            currentBlob = null;
+            mediaRecorder.ondataavailable = (ev) => {
+                if (ev.data && ev.data.size > 0) audioChunks.push(ev.data);
+            };
+
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(audioChunks, { type: mimeType || 'audio/webm' });
+                currentBlob = blob;
+                downloadBtn.disabled = false;
+                uploadBtn.disabled = false;
+                downloadBtn.onclick = () => downloadAudio(blob);
+
+                // stop tracks
+                if (currentStream) {
+                    currentStream.getTracks().forEach(t => t.stop());
+                    currentStream = null;
+                }
+            };
+
+            try {
+                mediaRecorder.start(1000);
+            } catch (err) {
+                showError('Failed to start recording: ' + err.message);
+                console.error(err);
+                return;
+            }
+
+            // Speech recognition
+            if (!recognition) recognition = initSpeechRecognition();
+            if (recognition) {
+                try {
+                    recognition.start();
+                } catch (err) {
+                    console.warn('recognition.start() failed:', err);
+                }
+            }
+
+            updateStatus('Recording...', true);
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+        }
+
+        function stopRecording() {
+            // stop recorder
+            try {
+                if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                    mediaRecorder.stop();
+                }
+            } catch (e) {
+                console.warn('Error stopping mediaRecorder', e);
+            }
+
+            // stop recognition
+            try {
+                if (recognition) {
+                    recognition.stop();
+                }
+            } catch (e) {
+                console.warn('Error stopping recognition', e);
+            }
+
+            updateStatus('Recording stopped', false);
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+        }
+
+        function downloadAudio(audioBlob) {
+            const url = URL.createObjectURL(audioBlob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = `recording_${Date.now()}.webm`;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => {
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }, 150);
+        }
+
+        async function uploadToServer() {
+            uploadResultDiv.textContent = '';
+            if (!currentBlob) {
+                showError('No audio to upload. Record first.');
+                return;
+            }
+
+            const fd = new FormData();
+            fd.append('audio', currentBlob, `recording_${Date.now()}.webm`);
+
+            try {
+                const resp = await fetch('/upload-audio', {
+                    method: 'POST',
+                    body: fd
+                });
+                if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
+                const json = await resp.json();
+                uploadResultDiv.textContent = `Uploaded: ${json.filename}`;
+            } catch (err) {
+                showError('Upload failed: ' + err.message);
+            }
+        }
+
+        // event listeners
+        startBtn.addEventListener('click', startRecording);
+        stopBtn.addEventListener('click', stopRecording);
+        uploadBtn.addEventListener('click', uploadToServer);
+
+        // initial checks
+        window.addEventListener('DOMContentLoaded', () => {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                showError('getUserMedia is not supported in this browser; audio recording will not work.');
+                startBtn.disabled = true;
+            }
+            if (!SpeechRecognition) {
+                // speech recognition optional: recording still works
+                showError('Speech Recognition API not available — live transcription will not work. Recording will still work.');
+            } else {
+                clearError();
+            }
+        });
+    </script>
+</body>
+</html>
