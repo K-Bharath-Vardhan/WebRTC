@@ -1,4 +1,4 @@
-# tts_service.py
+
 import os
 from datetime import datetime
 from gtts import gTTS  # pip install gTTS
@@ -8,7 +8,6 @@ UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 def find_most_recent_text_file(folder: str):
-    """Return path to most recently modified .txt file in folder or None."""
     txt_files = []
     for fn in os.listdir(folder):
         if fn.lower().endswith('.txt'):
@@ -25,7 +24,6 @@ def find_most_recent_text_file(folder: str):
 
 
 def synthesize_text_to_speech(text: str, base_name: str = "output") -> str:
-    """Convert text to speech using gTTS and save it as an MP3 file."""
     timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
     out_name = secure_filename(f"tts_{timestamp}_{base_name}.mp3")
     out_path = os.path.join(UPLOAD_FOLDER, out_name)
@@ -38,7 +36,6 @@ def synthesize_text_to_speech(text: str, base_name: str = "output") -> str:
 
 
 def synthesize_latest_text_file():
-    """Find latest text file in uploads/, convert it to speech, return output path."""
     txt_path = find_most_recent_text_file(UPLOAD_FOLDER)
     if not txt_path:
         raise FileNotFoundError("No .txt files found in uploads/")
@@ -54,4 +51,5 @@ def synthesize_latest_text_file():
         text = text[:MAX_CHARS] + "."
 
     base = os.path.splitext(os.path.basename(txt_path))[0]
+
     return synthesize_text_to_speech(text, base_name=base)
