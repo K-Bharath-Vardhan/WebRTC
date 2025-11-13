@@ -16,10 +16,6 @@ def index():
 
 @app.route('/upload-audio', methods=['POST'])
 def upload_audio():
-    """
-    Receives a multipart/form-data upload with the 'audio' file field,
-    saves it to uploads/ and returns JSON with saved filename.
-    """
     if 'audio' not in request.files:
         return jsonify({"error": "No audio part"}), 400
 
@@ -38,10 +34,6 @@ def upload_audio():
 
 @app.route('/synthesize-latest', methods=['GET'])
 def synthesize_latest():
-    """
-    Finds the most recent .txt in uploads/ and converts it to speech (MP3) using tts_service.
-    Returns the generated MP3 file as a streamed response.
-    """
     try:
         # Call your TTS helper (from tts_service import synthesize_latest_text_file)
         out_path = synthesize_latest_text_file()  # returns absolute or relative path to mp3
@@ -65,10 +57,6 @@ def synthesize_latest():
 
 @app.route('/save-transcript', methods=['POST'])
 def save_transcript():
-    """
-    Expects JSON: { "text": "the transcript text", "filename": "optional-name" }
-    Saves a UTF-8 .txt file into uploads/ and returns {"filename": ..., "url": ...}
-    """
     if not request.is_json:
         return jsonify({"error": "Expected JSON"}), 400
 
@@ -91,9 +79,9 @@ def save_transcript():
     except Exception as e:
         return jsonify({"error": f"Failed to save file: {str(e)}"}), 500
 
-    # return relative URL (your app already serves /uploads/<filename>)
     return jsonify({"filename": save_name, "url": f"/uploads/{save_name}"}), 200
 
 if __name__ == '__main__':
-    # Run development server. Visit http://127.0.0.1:5000
-    app.run(debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
+
