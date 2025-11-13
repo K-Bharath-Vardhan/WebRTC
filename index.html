@@ -39,7 +39,9 @@
             <button class="stop-btn" id="stopBtn" disabled>Stop Recording</button>
             <button class="download-btn" id="downloadBtn" disabled>Download Audio</button>
             <button class="upload-btn" id="uploadBtn" disabled>Upload to Server</button>
+            <button class="download-btn" id="synthBtn">Synthesize Latest Text</button>
         </div>
+
 
         <div id="error" class="error"></div>
 
@@ -50,6 +52,11 @@
                 <div class="interim-transcript" id="interimTranscript"></div>
             </div>
         </div>
+
+        <div style="margin-top:16px; text-align:center;">
+            <audio id="ttsPlayer" controls style="width:100%; display:none;"></audio>
+        </div>
+
 
         <div id="uploadResult" style="margin-top:15px; font-size:14px;"></div>
     </div>
@@ -252,6 +259,8 @@
             updateStatus('Recording stopped', false);
             startBtn.disabled = false;
             stopBtn.disabled = true;
+            
+            setTimeout(() => saveTranscript(), 300); // small delay to allow final speech-recognition events
         }
 
         function downloadAudio(audioBlob) {
@@ -309,6 +318,78 @@
                 clearError();
             }
         });
+
+        const synthBtn = document.getElementById('synthBtn');
+        const ttsPlayer = document.getElementById('ttsPlayer');
+
+        synthBtn.addEventListener('click', async () => {
+            clearError();
+            uploadResultDiv.textContent = '';
+            updateStatus('Requesting TTS from server...', false);
+            synthBtn.disabled = true;
+            try {
+                const resp = await fetch('/synthesize-latest');
+                if (!resp.ok) {
+                    const json = await resp.json().catch(()=>null);
+                    const msg = (json && json.error) ? json.error : `Server returned ${resp.status}`;
+                    showError('TTS failed: ' + msg);
+                    synthBtn.disabled = false;
+                    updateStatus('Ready', false);
+                    return;
+                }
+                // receive audio blob
+                const blob = await resp.blob();
+                const url = URL.createObjectURL(blob);
+                ttsPlayer.style.display = 'block';
+                ttsPlayer.src = url;
+                ttsPlayer.play().catch(()=>{/* autoplay may be blocked; user can press play */});
+                updateStatus('Playing synthesized speech', false);
+            } catch (err) {
+                showError('TTS request failed: ' + err.message);
+            } finally {
+                synthBtn.disabled = false;
+            }
+        });
+        
+        const saveTranscriptBtn = document.getElementById('saveTranscriptBtn'); // optional button
+        async function saveTranscript(filename) {
+            clearError();
+            if (!finalTranscript || !finalTranscript.trim()) {
+                showError('No transcript to save.');
+                return;
+            }
+
+            // optional filename hint (no extension)
+            const payload = { text: finalTranscript, filename: filename || 'transcript' };
+
+            try {
+                const resp = await fetch('/save-transcript', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!resp.ok) {
+                    const j = await resp.json().catch(()=>null);
+                    const msg = (j && j.error) ? j.error : `Server returned ${resp.status}`;
+                    showError('Save failed: ' + msg);
+                    return;
+                }
+
+                const json = await resp.json();
+                uploadResultDiv.innerHTML = `Transcript saved: <strong>${json.filename}</strong> — <a href="${json.url}" target="_blank" rel="noopener">Open</a>`;
+            } catch (err) {
+                showError('Save failed: ' + err.message);
+            }
+        }
+
+        // If you want a Save Transcript button, add it in controls HTML as:
+        // <button class="download-btn" id="saveTranscriptBtn">Save Transcript</button>
+        // and wire it:
+        if (saveTranscriptBtn) {
+            saveTranscriptBtn.addEventListener('click', ()=> saveTranscript());
+        }
+
     </script>
 </body>
 </html>
