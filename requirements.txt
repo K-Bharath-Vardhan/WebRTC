@@ -1,0 +1,4 @@
+Flask==2.3.2
+gTTS==2.5.4
+gunicorn==21.2.0
+Werkzeug==2.3.6
